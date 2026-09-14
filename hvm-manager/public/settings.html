@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Settings</title>
+  <link rel="icon" href="/img/favicon.ico" />
+  <link rel="stylesheet" href="/css/theme.css" />
+</head>
+<body>
+  <div class="app-shell" id="app-shell"></div>
+  <script src="/js/common.js"></script>
+  <script>
+    (async () => {
+      const ctx = await renderShell('settings');
+      if (!ctx) return;
+      const isAdmin = ctx.me.role === 'admin';
+      const s = ctx.settings;
+      const main = document.getElementById('main-content');
+
+      const readOnlyNote = isAdmin ? '' : `<div class="text-muted" style="margin-bottom:16px">Read-only \u2014 only admins can change panel settings.</div>`;
+      const dis = isAdmin ? '' : 'disabled';
+
+      main.innerHTML = `
+        <div class="topbar"><div><h1>Settings</h1><div class="subtitle">Panel branding and configuration.</div></div></div>
+        ${readOnlyNote}
+
+        <div class="section">
+          <h2>Branding</h2>
+          <div class="card">
+            <label>Panel name</label>
+            <input id="panel_name" value="${escapeAttr(s.panel_name)}" ${dis} />
+            <label>Owner name</label>
+            <input id="owner_name" value="${escapeAttr(s.owner_name)}" ${dis} />
+            <label>Credit line (shown in sidebar footer)</label>
+            <input id="credit_line" value="${escapeAttr(s.credit_line)}" ${dis} />
+            <label>Accent color</label>
+            <input id="accent_color" type="color" value="${s.accent_color}" ${dis} style="height:38px;padding:4px" />
+            <label>Logo</label>
+            <div class="flex gap-8">
+              <img src="${s.logo_url}" width="40" height="40" style="border-radius:8px;border:1px solid var(--border)" onerror="this.style.display='none'" />
+              ${isAdmin ? '<input type="file" id="logoFile" accept="image/*" />' : `<span class="text-muted">${escapeHtml(s.logo_url)}</span>`}
+            </div>
+          </div>
+        </div>
+
+        <div class="section">
+          <h2>Links</h2>
+          <div class="card">
+            <label>Discord invite</label>
+            <input id="discord_link" value="${escapeAttr(s.discord_link)}" ${dis} placeholder="https://discord.gg/..." />
+            <label>Telegram link</label>
+            <input id="telegram_link" value="${escapeAttr(s.telegram_link)}" ${dis} placeholder="https://t.me/..." />
+            <label>Extra links (one per line, format: Label | https://url)</label>
+            <textarea id="extra_links" rows="4" ${dis}>${(s.extra_links || []).map(l => `${l.label} | ${l.url}`).join('\n')}</textarea>
+          </div>
+        </div>
+
+        <div class="section">
+          <h2>Defaults</h2>
+          <div class="card grid cols-2">
+            <div>
+              <label>Default RAM (MB) for new VPS</label>
+              <input id="default_ram_mb" type="number" value="${s.default_ram_mb}" ${dis} />
+            </div>
+            <div>
+              <label>Default CPU cores for new VPS</label>
+              <input id="default_cpu_cores" type="number" step="0.5" value="${s.default_cpu_cores}" ${dis} />
+            </div>
+            <div>
+              <label>Max VPS per user</label>
+              <input id="max_vps_per_user" type="number" value="${s.max_vps_per_user}" ${dis} />
+            </div>
+          </div>
+        </div>
+
+        ${isAdmin ? '<button class="btn-primary" id="saveBtn">Save changes</button><span id="saveMsg" style="margin-left:10px" class="text-muted"></span>' : ''}
+      `;
+
+      if (isAdmin) {
+        document.getElementById('saveBtn').onclick = async () => {
+          const extraLinks = document.getElementById('extra_links').value
+            .split('\n').map(l => l.trim()).filter(Boolean)
+            .map(l => {
+              const [label, url] = l.split('|').map(x => x.trim());
+              return { label, url };
+            }).filter(l => l.label && l.url);
+
+          const payload = {
+            panel_name: document.getElementById('panel_name').value.trim(),
+            owner_name: document.getElementById('owner_name').value.trim(),
+            credit_line: document.getElementById('credit_line').value.trim(),
+            accent_color: document.getElementById('accent_color').value,
+            discord_link: document.getElementById('discord_link').value.trim(),
+            telegram_link: document.getElementById('telegram_link').value.trim(),
+            extra_links: extraLinks,
+            default_ram_mb: document.getElementById('default_ram_mb').value,
+            default_cpu_cores: document.getElementById('default_cpu_cores').value,
+            max_vps_per_user: document.getElementById('max_vps_per_user').value
+          };
+
+          try {
+            await api.put('/api/settings', payload);
+            const logoFile = document.getElementById('logoFile')?.files[0];
+            if (logoFile) {
+              const fd = new FormData();
+              fd.append('logo', logoFile);
+              await fetch('/api/settings/logo', { method: 'POST', body: fd });
+            }
+            document.getElementById('saveMsg').textContent = 'Saved. Reloading\u2026';
+            setTimeout(() => window.location.reload(), 700);
+          } catch (err) {
+            document.getElementById('saveMsg').textContent = 'Error: ' + err.message;
+          }
+        };
+      }
+    })();
+  </script>
+</body>
+</html>

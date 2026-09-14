@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Charts</title>
+  <link rel="icon" href="/img/favicon.ico" />
+  <link rel="stylesheet" href="/css/theme.css" />
+</head>
+<body>
+  <div class="app-shell" id="app-shell"></div>
+  <script src="/js/common.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+  <script>
+    (async () => {
+      const ctx = await renderShell('charts');
+      if (!ctx) return;
+      const main = document.getElementById('main-content');
+      main.innerHTML = `
+        <div class="topbar"><h1>Charts</h1></div>
+        <div class="grid cols-2">
+          <div class="card"><canvas id="resourceChart" height="220"></canvas></div>
+          <div class="card"><canvas id="statusChart" height="220"></canvas></div>
+        </div>
+      `;
+
+      const isAdmin = ctx.me.role === 'admin';
+      const list = isAdmin ? await api.get('/api/admin/vps') : await api.get('/api/vps');
+
+      const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#7c3aed';
+
+      new Chart(document.getElementById('resourceChart'), {
+        type: 'bar',
+        data: {
+          labels: list.map(v => v.name),
+          datasets: [
+            { label: 'RAM (MB)', data: list.map(v => v.ram_mb), backgroundColor: accent },
+            { label: 'CPU (cores x100)', data: list.map(v => v.cpu_cores * 100), backgroundColor: '#3fb950' }
+          ]
+        },
+        options: {
+          plugins: { legend: { labels: { color: '#b4b6c2' } }, title: { display: true, text: 'Resource allocation per VPS', color: '#eceef2' } },
+          scales: {
+            x: { ticks: { color: '#7c7e8c' }, grid: { color: '#2c2c36' } },
+            y: { ticks: { color: '#7c7e8c' }, grid: { color: '#2c2c36' } }
+          }
+        }
+      });
+
+      const running = list.filter(v => v.status === 'running').length;
+      const stopped = list.length - running;
+
+      new Chart(document.getElementById('statusChart'), {
+        type: 'doughnut',
+        data: {
+          labels: ['Running', 'Stopped'],
+          datasets: [{ data: [running, stopped], backgroundColor: ['#3fb950', '#7c7e8c'] }]
+        },
+        options: {
+          plugins: { legend: { labels: { color: '#b4b6c2' } }, title: { display: true, text: 'VPS status', color: '#eceef2' } }
+        }
+      });
+    })();
+  </script>
+</body>
+</html>
