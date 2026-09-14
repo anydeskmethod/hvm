@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Database</title>
+  <link rel="icon" href="/img/favicon.ico" />
+  <link rel="stylesheet" href="/css/theme.css" />
+</head>
+<body>
+  <div class="app-shell" id="app-shell"></div>
+  <script src="/js/common.js"></script>
+  <script>
+    (async () => {
+      const ctx = await renderShell('database');
+      if (!ctx) return;
+      if (ctx.me.role !== 'admin') {
+        document.getElementById('main-content').innerHTML = `<div class="empty-state">Admins only.</div>`;
+        return;
+      }
+      const main = document.getElementById('main-content');
+      main.innerHTML = `
+        <div class="topbar"><div><h1>Database</h1><div class="subtitle">Raw audit log of every admin action on this panel.</div></div></div>
+        <table>
+          <thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Detail</th></tr></thead>
+          <tbody id="logTable"></tbody>
+        </table>
+      `;
+      const logs = await api.get('/api/admin/logs');
+      document.getElementById('logTable').innerHTML = logs.map(l => `
+        <tr>
+          <td class="text-muted" style="font-family:var(--mono);font-size:11.5px">${new Date(l.created_at).toLocaleString()}</td>
+          <td>${escapeHtml(l.actor_username || 'system')}</td>
+          <td><span class="badge admin">${escapeHtml(l.action)}</span></td>
+          <td class="text-muted">${escapeHtml(l.detail || '')}</td>
+        </tr>
+      `).join('') || `<tr><td colspan="4" class="empty-state">No actions logged yet.</td></tr>`;
+    })();
+  </script>
+</body>
+</html>

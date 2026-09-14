@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Users</title>
+  <link rel="icon" href="/img/favicon.ico" />
+  <link rel="stylesheet" href="/css/theme.css" />
+</head>
+<body>
+  <div class="app-shell" id="app-shell"></div>
+  <script src="/js/common.js"></script>
+  <script>
+    (async () => {
+      const ctx = await renderShell('users');
+      if (!ctx) return;
+      if (ctx.me.role !== 'admin') {
+        document.getElementById('main-content').innerHTML = `<div class="empty-state">Admins only.</div>`;
+        return;
+      }
+      const main = document.getElementById('main-content');
+      main.innerHTML = `
+        <div class="topbar">
+          <div><h1>Users</h1><div class="subtitle">Manage panel accounts and roles.</div></div>
+          <button class="btn-primary" id="addBtn">+ Add user</button>
+        </div>
+        <table>
+          <thead><tr><th>Username</th><th>Role</th><th>Created</th><th>Actions</th></tr></thead>
+          <tbody id="userTable"></tbody>
+        </table>
+      `;
+
+      async function load() {
+        const users = await api.get('/api/admin/users');
+        document.getElementById('userTable').innerHTML = users.map(u => `
+          <tr>
+            <td>${escapeHtml(u.username)}</td>
+            <td><span class="badge ${u.role === 'admin' ? 'admin' : 'stopped'}">${u.role}</span></td>
+            <td class="text-muted">${new Date(u.created_at).toLocaleDateString()}</td>
+            <td>${u.id === ctx.me.id ? '<span class="text-muted">you</span>' : `<button class="btn-sm btn-danger" onclick="delUser(${u.id})">Delete</button>`}</td>
+          </tr>
+        `).join('');
+      }
+      await load();
+
+      window.delUser = async (id) => {
+        if (!confirm('Delete this user? Their VPS will become unassigned.')) return;
+        await api.del('/api/admin/users/' + id);
+        load();
+      };
+
+      document.getElementById('addBtn').onclick = () => {
+        const backdrop = document.createElement('div');
+        backdrop.className = 'modal-backdrop';
+        backdrop.innerHTML = `
+          <div class="modal">
+            <h3>Add user</h3>
+            <label>Username</label><input id="uName" />
+            <label>Password</label><input id="uPass" type="password" />
+            <label>Role</label>
+            <select id="uRole"><option value="user">user</option><option value="admin">admin</option></select>
+            <div class="modal-actions">
+              <button id="uCancel">Cancel</button>
+              <button class="btn-primary" id="uCreate">Create</button>
+            </div>
+          </div>
+        `;
+        document.body.appendChild(backdrop);
+        backdrop.querySelector('#uCancel').onclick = () => backdrop.remove();
+        backdrop.querySelector('#uCreate').onclick = async () => {
+          try {
+            await api.post('/api/admin/users', {
+              username: backdrop.querySelector('#uName').value.trim(),
+              password: backdrop.querySelector('#uPass').value,
+              role: backdrop.querySelector('#uRole').value
+            });
+            backdrop.remove();
+            load();
+          } catch (err) { alert(err.message); }
+        };
+      };
+    })();
+  </script>
+</body>
+</html>

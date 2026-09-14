@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Dashboard</title>
+  <link rel="icon" href="/img/favicon.ico" />
+  <link rel="stylesheet" href="/css/theme.css" />
+</head>
+<body>
+  <div class="app-shell" id="app-shell"></div>
+
+  <script src="/js/common.js"></script>
+  <script>
+    (async () => {
+      const ctx = await renderShell('dashboard');
+      if (!ctx) return;
+      const { me } = ctx;
+      const main = document.getElementById('main-content');
+
+      main.innerHTML = `
+        <div class="topbar">
+          <div>
+            <h1>Welcome back, ${escapeHtml(me.username)}</h1>
+            <div class="subtitle">Here's what's running under your account.</div>
+          </div>
+        </div>
+        <div class="grid cols-3 section" id="statCards"></div>
+        <div class="section">
+          <h2>Your VPS</h2>
+          <div class="grid cols-3" id="vpsGrid"></div>
+        </div>
+      `;
+
+      const list = await api.get('/api/vps');
+      const running = list.filter(v => v.status === 'running').length;
+
+      document.getElementById('statCards').innerHTML = `
+        <div class="card stat-card"><div class="stat-label">Total VPS</div><div class="stat-value">${list.length}</div><div class="stat-sub">assigned to you</div></div>
+        <div class="card stat-card"><div class="stat-label">Running</div><div class="stat-value">${running}</div><div class="stat-sub">active now</div></div>
+        <div class="card stat-card"><div class="stat-label">Stopped</div><div class="stat-value">${list.length - running}</div><div class="stat-sub">idle</div></div>
+      `;
+
+      const grid = document.getElementById('vpsGrid');
+      if (list.length === 0) {
+        grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1">No VPS assigned to you yet. Ask an admin to assign one from the Admin Panel.</div>`;
+        return;
+      }
+      grid.innerHTML = list.map(v => `
+        <div class="card vps-card" onclick="window.location.href='/vps.html?id=${v.id}'">
+          <div class="vps-top">
+            <span class="vps-name">${escapeHtml(v.name)}</span>
+            <span class="badge ${v.status}">${v.status}</span>
+          </div>
+          <div class="vps-meta">
+            <span>RAM ${v.ram_mb}MB</span>
+            <span>CPU ${v.cpu_cores} core</span>
+            <span>${escapeHtml(v.image)}</span>
+          </div>
+        </div>
+      `).join('');
+    })();
+  </script>
+</body>
+</html>

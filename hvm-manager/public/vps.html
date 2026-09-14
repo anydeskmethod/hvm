@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>VPS</title>
+  <link rel="icon" href="/img/favicon.ico" />
+  <link rel="stylesheet" href="/css/theme.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/xterm/5.3.0/css/xterm.min.css" />
+</head>
+<body>
+  <div class="app-shell" id="app-shell"></div>
+
+  <script src="/js/common.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xterm/5.3.0/xterm.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xterm/5.3.0/addons/fit/xterm-addon-fit.min.js"></script>
+  <script>
+    (async () => {
+      const ctx = await renderShell('vps');
+      if (!ctx) return;
+      const main = document.getElementById('main-content');
+
+      const params = new URLSearchParams(window.location.search);
+      let vpsId = params.get('id');
+
+      if (!vpsId) {
+        // No id given: show the list, same as My VPS page
+        const list = await api.get('/api/vps');
+        main.innerHTML = `
+          <div class="topbar"><h1>My VPS</h1></div>
+          <div class="grid cols-3" id="vpsGrid"></div>
+        `;
+        document.getElementById('vpsGrid').innerHTML = list.length ? list.map(v => `
+          <div class="card vps-card" onclick="window.location.href='/vps.html?id=${v.id}'">
+            <div class="vps-top"><span class="vps-name">${escapeHtml(v.name)}</span><span class="badge ${v.status}">${v.status}</span></div>
+            <div class="vps-meta"><span>RAM ${v.ram_mb}MB</span><span>CPU ${v.cpu_cores} core</span></div>
+          </div>
+        `).join('') : `<div class="empty-state" style="grid-column:1/-1">No VPS assigned yet.</div>`;
+        return;
+      }
+
+      const vps = await api.get('/api/vps/' + vpsId);
+
+      main.innerHTML = `
+        <div class="topbar">
+          <div>
+            <h1 id="vpsTitle">${escapeHtml(vps.name)}</h1>
+            <div class="subtitle">${escapeHtml(vps.image)} \u00b7 RAM ${vps.ram_mb}MB \u00b7 CPU ${vps.cpu_cores} core</div>
+          </div>
+          <div class="flex gap-8">
+            <span class="badge ${vps.status}" id="statusBadge">${vps.status}</span>
+            <button class="btn-sm" onclick="renameVps()">Rename</button>
+            <button class="btn-sm" id="startBtn">Start</button>
+            <button class="btn-sm" id="stopBtn">Stop</button>
+            <button class="btn-sm" id="restartBtn">Restart</button>
+          </div>
+        </div>
+
+        <div class="grid cols-4 section" id="liveStats">
+          <div class="card stat-card"><div class="stat-label">CPU</div><div class="stat-value" id="cpuVal">\u2014</div></div>
+          <div class="card stat-card"><div class="stat-label">Memory</div><div class="stat-value" id="memVal">\u2014</div></div>
+          <div class="card stat-card"><div class="stat-label">Status</div><div class="stat-value" id="stateVal">\u2014</div></div>
+          <div class="card stat-card"><div class="stat-label">Uptime since</div><div class="stat-value" style="font-size:13px" id="upVal">\u2014</div></div>
+        </div>
+
+        <div class="section">
+          <h2>Live terminal</h2>
+          <div class="terminal-wrap">
+            <div class="terminal-header">
+              <span class="term-dot red"></span><span class="term-dot yellow"></span><span class="term-dot green"></span>
+              <span style="margin-left:6px">${escapeHtml(vps.container_name || 'not provisioned')}</span>
+            </div>
+            <div id="terminal"></div>
+          </div>
+        </div>
+
+        <div class="section">
+          <h2>Live logs</h2>
+          <div class="logs-box" id="logsBox"></div>
+        </div>
+      `;
+
+      document.getElementById('startBtn').onclick = () => vpsAction('start');
+      document.getElementById('stopBtn').onclick = () => vpsAction('stop');
+      document.getElementById('restartBtn').onclick = () => vpsAction('restart');
+
+      async function vpsAction(action) {
+        try {
+          await api.post(`/api/vps/${vpsId}/${action}`);
+          refreshStats();
+        } catch (err) { alert(err.message); }
+      }
+
+      window.renameVps = async () => {
+        const name = prompt('New name for this VPS:', vps.name);
+        if (!name) return;
+        await api.patch(`/api/vps/${vpsId}/rename`, { name });
+        document.getElementById('vpsTitle').textContent = name;
+      };
+
+      async function refreshStats() {
+        try {
+          const s = await api.get(`/api/vps/${vpsId}/stats`);
+          document.getElementById('cpuVal').textContent = (s.cpuPercent ?? 0) + '%';
+          document.getElementById('memVal').textContent = (s.memUsedMb ?? 0) + ' / ' + (s.memLimitMb ?? 0) + ' MB';
+          document.getElementById('stateVal').textContent = s.status || 'unknown';
+          document.getElementById('upVal').textContent = s.startedAt ? new Date(s.startedAt).toLocaleString() : '\u2014';
+          const badge = document.getElementById('statusBadge');
+          badge.textContent = s.status || vps.status;
+          badge.className = 'badge ' + (s.running ? 'running' : 'stopped');
+        } catch (_) {}
+      }
+      refreshStats();
+      setInterval(refreshStats, 4000);
+
+      // ── Live terminal (xterm.js <-> WebSocket <-> node-pty <-> docker exec) ──
+      const term = new Terminal({
+        theme: { background: '#0a0a0d', foreground: '#eceef2', cursor: '#7c3aed' },
+        fontFamily: "'JetBrains Mono', monospace",
+        fontSize: 13,
+        cursorBlink: true
+      });
+      const fitAddon = new FitAddon.FitAddon();
+      term.loadAddon(fitAddon);
+      term.open(document.getElementById('terminal'));
+      fitAddon.fit();
+      window.addEventListener('resize', () => fitAddon.fit());
+
+      const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const termSocket = new WebSocket(`${wsProto}//${window.location.host}/ws/terminal/${vpsId}`);
+
+      termSocket.onopen = () => {
+        termSocket.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+      };
+      termSocket.onmessage = (evt) => {
+        const msg = JSON.parse(evt.data);
+        if (msg.type === 'output') term.write(msg.data);
+        if (msg.type === 'exit') term.write('\r\n[session ended]\r\n');
+      };
+      term.onData((data) => {
+        if (termSocket.readyState === WebSocket.OPEN) termSocket.send(JSON.stringify({ type: 'input', data }));
+      });
+      term.onResize(({ cols, rows }) => {
+        if (termSocket.readyState === WebSocket.OPEN) termSocket.send(JSON.stringify({ type: 'resize', cols, rows }));
+      });
+
+      // ── Live logs ──
+      const logsBox = document.getElementById('logsBox');
+      const logSocket = new WebSocket(`${wsProto}//${window.location.host}/ws/logs/${vpsId}`);
+      logSocket.onmessage = (evt) => {
+        const msg = JSON.parse(evt.data);
+        if (msg.type === 'log') {
+          logsBox.textContent += msg.data;
+          logsBox.scrollTop = logsBox.scrollHeight;
+        }
+      };
+    })();
+  </script>
+</body>
+</html>
