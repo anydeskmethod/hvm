@@ -120,10 +120,12 @@ step "How do you want to expose the panel to the internet?"
 echo "  1) Cloudflare Tunnel"
 echo "  2) Ngrok"
 echo "  3) GitHub Codespaces port forwarding"
-echo "  4) Skip \u2014 local network / localhost only"
+echo "  4) Port Buddy (portbuddy.dev)"
+echo "  5) Railway (deploy the panel itself, instead of tunneling it)"
+echo "  6) Skip \u2014 local network / localhost only"
 echo ""
-read -rp "$(echo -e "${C_DIM}Choose 1-4${C_RESET} [4]: ")" TUNNEL_CHOICE
-TUNNEL_CHOICE=${TUNNEL_CHOICE:-4}
+read -rp "$(echo -e "${C_DIM}Choose 1-6${C_RESET} [6]: ")" TUNNEL_CHOICE
+TUNNEL_CHOICE=${TUNNEL_CHOICE:-6}
 
 # ── 5. Write .env ─────────────────────────────────────────────────────
 step "Writing configuration..."
@@ -303,6 +305,86 @@ case $TUNNEL_CHOICE in
     echo "    2. Find port ${PANEL_PORT}"
     echo "    3. Right-click \u2192 Port Visibility \u2192 Public"
     echo "    4. Use the generated *.app.github.dev URL"
+    ;;
+  4)
+    step "Setting up Port Buddy..."
+    if ! command -v portbuddy >/dev/null 2>&1; then
+      warn "portbuddy not found, installing..."
+      # Port Buddy officially ships via Homebrew, Docker, or a manual binary
+      # download \u2014 there's no curl-pipe installer, so try Homebrew (works on
+      # Linux via Linuxbrew) and fall back to pointing at the manual download.
+      if command -v brew >/dev/null 2>&1; then
+        brew install amak-tech/tap/portbuddy 2>/dev/null && ok "Port Buddy CLI installed via Homebrew" \
+          || warn "Homebrew install failed."
+      fi
+      if ! command -v portbuddy >/dev/null 2>&1; then
+        warn "No supported auto-install path found on this system."
+        echo -e "${C_DIM}  Install manually (pick one):${C_RESET}"
+        echo "    - Homebrew (Linux/macOS): brew install amak-tech/tap/portbuddy"
+        echo "    - Manual binary: https://portbuddy.dev/install"
+        echo "    - Docker: docker pull amaktech/portbuddy:latest"
+      fi
+    fi
+
+    if command -v portbuddy >/dev/null 2>&1; then
+      warn "Port Buddy requires a free account and API token."
+      echo -e "${C_DIM}  1. Sign up / log in at https://portbuddy.dev/login${C_RESET}"
+      echo -e "${C_DIM}  2. Generate a token at https://portbuddy.dev/app/tokens${C_RESET}"
+      read -rp "$(echo -e "${C_DIM}Paste your Port Buddy API token (or leave blank to skip)${C_RESET}: ")" PORTBUDDY_TOKEN
+      if [ -n "$PORTBUDDY_TOKEN" ]; then
+        if portbuddy init "$PORTBUDDY_TOKEN" >/dev/null 2>&1; then
+          ok "Authenticated with Port Buddy"
+          nohup portbuddy "${PANEL_PORT}" > logs/portbuddy.log 2>&1 &
+          echo $! > .portbuddy.pid
+
+          echo -ne "${C_DIM}  waiting for public URL"
+          TUNNEL_URL=""
+          for i in $(seq 1 20); do
+            TUNNEL_URL=$(grep -o 'https://[a-zA-Z0-9.-]*\.portbuddy\.dev' logs/portbuddy.log 2>/dev/null | head -n1)
+            if [ -n "$TUNNEL_URL" ]; then break; fi
+            echo -ne "."
+            sleep 1
+          done
+          echo -e "${C_RESET}"
+
+          if [ -n "$TUNNEL_URL" ]; then
+            ok "Public URL: ${TUNNEL_URL}"
+          else
+            warn "portbuddy is running but hasn't printed a URL yet."
+            echo -e "${C_DIM}  Check with:${C_RESET}  tail -f logs/portbuddy.log"
+          fi
+        else
+          err "portbuddy init failed \u2014 check your token and try again manually:"
+          echo "    portbuddy init <YOUR_TOKEN>"
+          echo "    portbuddy ${PANEL_PORT}"
+        fi
+      else
+        warn "Skipped \u2014 run 'portbuddy init <token>' then 'portbuddy ${PANEL_PORT}' manually later."
+      fi
+    fi
+    ;;
+  5)
+    step "Deploying to Railway"
+    warn "Railway hosts the panel itself on their infrastructure \u2014 it doesn't tunnel your VPS."
+    echo -e "${C_DIM}  This only makes sense if you want Railway (not this VPS) running HVM Manager.${C_RESET}"
+    if ! command -v railway >/dev/null 2>&1; then
+      warn "Railway CLI not found, installing..."
+      if command -v npm >/dev/null 2>&1; then
+        npm install -g @railway/cli --silent 2>/dev/null && ok "Railway CLI installed" \
+          || err "Install failed. Install manually: npm install -g @railway/cli"
+      fi
+    fi
+    if command -v railway >/dev/null 2>&1; then
+      echo -e "${C_DIM}  Log in, then deploy from this project folder:${C_RESET}"
+      echo "    railway login"
+      echo "    railway init"
+      echo "    railway up"
+      echo -e "${C_DIM}  Railway will assign a public *.up.railway.app URL after deploy.${C_RESET}"
+      read -rp "$(echo -e "${C_DIM}Run 'railway login' now?${C_RESET} [y/N]: ")" DO_RAILWAY_LOGIN
+      if [[ "$DO_RAILWAY_LOGIN" =~ ^[Yy]$ ]]; then
+        railway login || warn "Railway login didn't complete \u2014 run 'railway login' manually when ready."
+      fi
+    fi
     ;;
   *)
     warn "Skipped tunnel setup. Panel is reachable at http://localhost:${PANEL_PORT} on this machine's network."
