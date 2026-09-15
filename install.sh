@@ -158,15 +158,71 @@ ok "Admin account ready: ${ADMIN_USER}"
 # ── 8. Start the panel in the background ─────────────────────────────
 step "Starting HVM Manager..."
 mkdir -p logs
+
+# Pre-flight: is the port already occupied (e.g. a previous run still alive,
+# or an old process that never got cleaned up)?
+port_in_use() {
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -i ":$1" -sTCP:LISTEN >/dev/null 2>&1
+  elif command -v ss >/dev/null 2>&1; then
+    ss -ltn "( sport = :$1 )" 2>/dev/null | grep -q ":$1"
+  else
+    (echo > /dev/tcp/127.0.0.1/$1) >/dev/null 2>&1
+  fi
+}
+
+if port_in_use "$PANEL_PORT"; then
+  warn "Port ${PANEL_PORT} is already in use."
+  if [ -f .panel.pid ] && kill -0 "$(cat .panel.pid)" 2>/dev/null; then
+    warn "It looks like a previous HVM Manager instance (PID $(cat .panel.pid)) is still running."
+    read -rp "$(echo -e "${C_DIM}Stop it and continue?${C_RESET} [Y/n]: ")" STOP_OLD
+    if [[ ! "$STOP_OLD" =~ ^[Nn]$ ]]; then
+      kill "$(cat .panel.pid)" 2>/dev/null || true
+      sleep 1
+      # Escalate if it's still alive
+      if kill -0 "$(cat .panel.pid)" 2>/dev/null; then
+        kill -9 "$(cat .panel.pid)" 2>/dev/null || true
+        sleep 1
+      fi
+      rm -f .panel.pid
+      ok "Old instance stopped."
+    else
+      err "Can't start on a port that's already in use. Re-run and choose a different port, or free port ${PANEL_PORT} yourself and try again."
+      exit 1
+    fi
+  else
+    err "Something else on this machine is using port ${PANEL_PORT} (not a previous HVM Manager run)."
+    echo -e "${C_DIM}  Find out what with:${C_RESET}  sudo lsof -i :${PANEL_PORT}"
+    echo -e "${C_DIM}  Or just re-run install.sh and pick a different port.${C_RESET}"
+    exit 1
+  fi
+fi
+
 nohup npm start > logs/panel.log 2>&1 &
 PANEL_PID=$!
 echo $PANEL_PID > .panel.pid
-sleep 2
 
-if kill -0 $PANEL_PID 2>/dev/null; then
+# Give it a moment, then verify it actually bound the port \u2014 a live PID
+# alone isn't proof of success, since `npm start` can stay alive briefly
+# even after the underlying `node` process crashes.
+sleep 2
+PANEL_OK=false
+for i in $(seq 1 5); do
+  if port_in_use "$PANEL_PORT"; then
+    PANEL_OK=true
+    break
+  fi
+  sleep 1
+done
+
+if [ "$PANEL_OK" = true ]; then
   ok "Panel running (PID $PANEL_PID) on http://localhost:${PANEL_PORT}"
 else
-  err "Panel failed to start. Check logs/panel.log for details."
+  err "Panel failed to start. Last lines of logs/panel.log:"
+  echo ""
+  tail -n 15 logs/panel.log 2>/dev/null | sed 's/^/    /'
+  echo ""
+  err "Fix the issue above, then re-run ./install.sh (or just: npm start)"
   exit 1
 fi
 
@@ -188,13 +244,28 @@ case $TUNNEL_CHOICE in
       ok "Launching quick tunnel (no Cloudflare account needed)..."
       nohup cloudflared tunnel --url "http://localhost:${PANEL_PORT}" > logs/cloudflared.log 2>&1 &
       echo $! > .cloudflared.pid
-      sleep 4
-      TUNNEL_URL=$(grep -o 'https://[a-zA-Z0-9.-]*\.trycloudflare\.com' logs/cloudflared.log | head -n1)
+
+      echo -ne "${C_DIM}  waiting for public URL"
+      TUNNEL_URL=""
+      for i in $(seq 1 20); do
+        TUNNEL_URL=$(grep -o 'https://[a-zA-Z0-9.-]*\.trycloudflare\.com' logs/cloudflared.log 2>/dev/null | head -n1)
+        if [ -n "$TUNNEL_URL" ]; then break; fi
+        echo -ne "."
+        sleep 1
+      done
+      echo -e "${C_RESET}"
+
       if [ -n "$TUNNEL_URL" ]; then
         ok "Public URL: ${TUNNEL_URL}"
-      else
-        warn "Tunnel starting \u2014 check logs/cloudflared.log for your public URL in a few seconds:"
+      elif kill -0 "$(cat .cloudflared.pid 2>/dev/null)" 2>/dev/null; then
+        warn "cloudflared is running but hasn't printed a URL yet. It may just be slow to connect."
+        echo -e "${C_DIM}  Watch for it with:${C_RESET}"
         echo "    tail -f logs/cloudflared.log"
+      else
+        err "cloudflared process died. Check what went wrong with:"
+        echo "    cat logs/cloudflared.log"
+        echo -e "${C_DIM}  Or restart just the tunnel with:${C_RESET}"
+        echo "    cloudflared tunnel --url http://localhost:${PANEL_PORT}"
       fi
       echo -e "${C_DIM}For a permanent tunnel with your own domain, use: cloudflared tunnel login${C_RESET}"
     fi
@@ -243,6 +314,9 @@ echo ""
 echo -e "${C_GREEN}\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557${C_RESET}"
 echo -e "${C_GREEN}\u2551${C_RESET}  ${PANEL_NAME} is up and running!"
 echo -e "${C_GREEN}\u2551${C_RESET}"
+if [ -n "${TUNNEL_URL:-}" ]; then
+  echo -e "${C_GREEN}\u2551${C_RESET}  Public:   ${TUNNEL_URL}"
+fi
 echo -e "${C_GREEN}\u2551${C_RESET}  Local:    http://localhost:${PANEL_PORT}"
 echo -e "${C_GREEN}\u2551${C_RESET}  Login:    ${ADMIN_USER}"
 echo -e "${C_GREEN}\u2551${C_RESET}  Password: (the one you entered)"
